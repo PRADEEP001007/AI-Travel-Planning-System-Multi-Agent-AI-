@@ -343,13 +343,27 @@ graph.add_edge("final_agent", END)
 # CREATE INDEX CONCURRENTLY, which can't run inside a transaction block.
 # row_factory=dict_row is required: the checkpointer reads rows by column name.
 # ---------------------------------------------------------------------------
-_conn = psycopg.connect(
-    DATABASE_URL,
-    autocommit=True,
-    row_factory=dict_row,
-)
-checkpointer = PostgresSaver(_conn)
-checkpointer.setup()
+# If DATABASE_URL is missing or the database cannot be reached (for example on
+# Streamlit Cloud with a localhost URL), fall back to in-memory checkpointing so
+# the app still runs. Memory is then lost when the app restarts.
+USING_POSTGRES = False
+try:
+    if not DATABASE_URL:
+        raise RuntimeError("DATABASE_URL is not set")
+    _conn = psycopg.connect(
+        DATABASE_URL,
+        autocommit=True,
+        row_factory=dict_row,
+        connect_timeout=10,
+    )
+    checkpointer = PostgresSaver(_conn)
+    checkpointer.setup()
+    USING_POSTGRES = True
+except Exception as e:
+    from langgraph.checkpoint.memory import MemorySaver
+
+    print(f"[warning] PostgreSQL unavailable ({type(e).__name__}); using in-memory checkpointer.")
+    checkpointer = MemorySaver()
 
 app = graph.compile(checkpointer=checkpointer)
 
